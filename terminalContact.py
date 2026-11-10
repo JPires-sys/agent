@@ -6,6 +6,11 @@ import dotenv
 dotenv.load_dotenv()
 
 
+# Prefixo usado quando actionClaude falha: a string de erro e retornada
+# (em vez de None) para que quem chamou consiga exibir o motivo.
+ERRO_PREFIX = "[ERRO]"
+
+
 def actionClaude(prompt, model, effort, agent):
     try:
         resultado = subprocess.run(
@@ -13,14 +18,18 @@ def actionClaude(prompt, model, effort, agent):
          "--model", model, "--agent", agent, "--effort", effort],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         cwd=os.getenv("route_terminal"),
         )
         if resultado.returncode != 0:
-                print("Erro:", resultado.stderr)
-                return
+                detalhe = (resultado.stderr or resultado.stdout or "").strip()
+                print("Erro:", detalhe)
+                return f"{ERRO_PREFIX} codigo de saida {resultado.returncode}: {detalhe or 'sem detalhes'}"
         return resultado.stdout
     except Exception as erro:
         print(f'erro: {erro}')
+        return f"{ERRO_PREFIX} {erro}"
  
 
 class TerminalContact:
