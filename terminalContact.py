@@ -6,10 +6,11 @@ import dotenv
 dotenv.load_dotenv()
 
 
-def actionClaude(prompt):
+def actionClaude(prompt, model, effort, agent):
     try:
         resultado = subprocess.run(
-        [ "claude", prompt, "--permission-mode", "acceptEdits"],
+        ["claude", "-p", prompt, "--permission-mode", "acceptEdits",
+         "--model", model, "--agent", agent, "--effort", effort],
         capture_output=True,
         text=True,
         cwd=os.getenv("route_terminal"),
@@ -20,7 +21,7 @@ def actionClaude(prompt):
         return resultado.stdout
     except Exception as erro:
         print(f'erro: {erro}')
-
+ 
 
 class TerminalContact:
     """Gerencia o envio de prompts ao Claude e mantém um histórico das interações."""
@@ -28,8 +29,12 @@ class TerminalContact:
     def __init__(self):
         self.historico = []
 
-    def enviar(self, prompt):
-        resposta = actionClaude(prompt)
+    def teste():
+        print("teste, funfa")
+
+
+    def enviar(self, prompt, effort, model, agent):
+        resposta = actionClaude(prompt, model, effort, agent)
         self.historico.append({"prompt": prompt, "resposta": resposta})
         return resposta
 
@@ -42,4 +47,4 @@ class TerminalContact:
         self.historico.clear()
 
 
-print(actionClaude("voce consegue criar um repositorio no github e fazer um commit e push desta pasta agora? se sim faça agora pfv!"))
+# print(actionClaude("somente mova o codigo escritorio_pixel.py para uma pasta chamada 'testes-agents' e deixe os personagens e ambiente do codigo mais elegante e moderno ", "claude-opus-5-5", "low", "agent-007"))
