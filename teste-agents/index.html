@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Doceria - Ingredientes da Receita</title>
+<style>
+  :root { --rosa:#f8b8cc; --rosa-esc:#e8789e; --creme:#fff6e5; --choc:#5a3425; --choc-claro:#8a5a44; }
+  * { box-sizing: border-box; }
+  body { margin:0; min-height:100vh; background:var(--creme); color:var(--choc);
+    font-family:"Nunito","Quicksand","Comic Sans MS","Trebuchet MS",sans-serif; padding:24px 12px; }
+  .card { max-width:620px; margin:0 auto; background:#fff; border:3px solid var(--rosa);
+    border-radius:28px; box-shadow:0 10px 30px rgba(90,52,37,.15); overflow:hidden; }
+  header { background:var(--rosa); text-align:center; padding:20px 16px; }
+  header h1 { margin:0; font-size:1.7rem; color:var(--choc); }
+  header p { margin:4px 0 0; color:var(--choc-claro); }
+  main { padding:20px; }
+  label { display:block; font-weight:700; margin:12px 0 4px; }
+  input, select { width:100%; padding:10px 12px; border:2px solid var(--rosa); border-radius:14px;
+    font:inherit; color:var(--choc); background:var(--creme); }
+  input:focus, select:focus { outline:none; border-color:var(--rosa-esc); }
+  .invalid { border-color:#d33 !important; }
+  .row { display:flex; gap:10px; flex-wrap:wrap; }
+  .row > div { flex:1 1 130px; }
+  .row > div.grow { flex:2 1 200px; }
+  button { font:inherit; font-weight:700; cursor:pointer; border:none; border-radius:999px; padding:10px 20px; }
+  #add { background:var(--rosa-esc); color:#fff; margin-top:16px; width:100%; font-size:1.05rem; }
+  #add:hover { background:#d55f88; }
+  .erro { color:#c22; min-height:1.2em; margin:8px 0 0; font-size:.9rem; }
+  h2 { margin:24px 0 8px; font-size:1.2rem; }
+  ul { list-style:none; margin:0; padding:0; }
+  li { display:flex; align-items:center; justify-content:space-between; gap:8px;
+    background:var(--creme); border-radius:16px; padding:10px 14px; margin-bottom:8px; border:2px dashed var(--rosa); }
+  li .qtd { color:var(--choc-claro); }
+  .rem { background:var(--choc); color:#fff; padding:6px 12px; font-size:.85rem; }
+  .rem:hover { background:var(--choc-claro); }
+  .vazio { text-align:center; color:var(--choc-claro); padding:10px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <header>
+    <h1>🧁 Doceria da Vovó 🍰</h1>
+    <p>Cadastre os ingredientes da sua receita 🍫🍓</p>
+  </header>
+  <main>
+    <label for="receita">🍮 Nome da receita</label>
+    <input id="receita" type="text" maxlength="80" placeholder="Ex.: Bolo de chocolate">
+
+    <h2>🍪 Novo ingrediente</h2>
+    <form id="form" novalidate>
+      <div class="row">
+        <div class="grow"><label for="nome">Ingrediente</label>
+          <input id="nome" type="text" maxlength="60" placeholder="Ex.: Farinha de trigo"></div>
+        <div><label for="qtd">Quantidade</label>
+          <input id="qtd" type="number" min="0" step="any" placeholder="0"></div>
+        <div><label for="un">Unidade</label>
+          <select id="un">
+            <option>g</option><option>kg</option><option>ml</option><option>l</option>
+            <option>xícara</option><option>colher de sopa</option><option>colher de chá</option><option>unidade</option>
+          </select></div>
+      </div>
+      <p class="erro" id="erro" role="alert"></p>
+      <button type="submit" id="add">➕ Adicionar 🍬</button>
+    </form>
+
+    <h2>🍩 Ingredientes <span id="contador"></span></h2>
+    <ul id="lista"></ul>
+  </main>
+</div>
+
+<script>
+(function () {
+  var KEY = 'doceria_receita';
+  var $ = function (id) { return document.getElementById(id); };
+  var estado = { receita: '', ingredientes: [] };
+
+  function carregar() {
+    try {
+      var d = JSON.parse(localStorage.getItem(KEY));
+      if (d && Array.isArray(d.ingredientes)) {
+        estado.receita = String(d.receita || '');
+        estado.ingredientes = d.ingredientes;
+      }
+    } catch (e) {}
+  }
+  function salvar() {
+    try { localStorage.setItem(KEY, JSON.stringify(estado)); } catch (e) {}
+  }
+
+  function render() {
+    var ul = $('lista');
+    ul.innerHTML = '';
+    $('contador').textContent = estado.ingredientes.length ? '(' + estado.ingredientes.length + ')' : '';
+    if (!estado.ingredientes.length) {
+      var v = document.createElement('li');
+      v.className = 'vazio';
+      v.style.justifyContent = 'center';
+      v.textContent = 'Nenhum ingrediente ainda 🥄';
+      ul.appendChild(v);
+      return;
+    }
+    estado.ingredientes.forEach(function (ing, i) {
+      var li = document.createElement('li');
+      var span = document.createElement('span');
+      var b = document.createElement('strong');
+      b.textContent = ing.nome;
+      var q = document.createElement('span');
+      q.className = 'qtd';
+      q.textContent = ' — ' + ing.quantidade + ' ' + ing.unidade;
+      span.appendChild(document.createTextNode('🍬 '));
+      span.appendChild(b);
+      span.appendChild(q);
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'rem';
+      btn.textContent = 'Remover';
+      btn.addEventListener('click', function () {
+        estado.ingredientes.splice(i, 1);
+        salvar(); render();
+      });
+      li.appendChild(span); li.appendChild(btn);
+      ul.appendChild(li);
+    });
+  }
+
+  $('receita').addEventListener('input', function () {
+    estado.receita = this.value; salvar();
+  });
+
+  $('form').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var nome = $('nome').value.trim();
+    var qtd = parseFloat($('qtd').value);
+    var erro = [];
+    $('nome').classList.toggle('invalid', !nome);
+    if (!nome) erro.push('Informe o nome do ingrediente.');
+    var qOk = isFinite(qtd) && qtd > 0;
+    $('qtd').classList.toggle('invalid', !qOk);
+    if (!qOk) erro.push('Informe uma quantidade maior que zero.');
+    $('erro').textContent = erro.join(' ');
+    if (erro.length) return;
+    estado.ingredientes.push({ nome: nome, quantidade: qtd, unidade: $('un').value });
+    salvar(); render();
+    $('nome').value = ''; $('qtd').value = '';
+    $('nome').focus();
+  });
+
+  carregar();
+  $('receita').value = estado.receita;
+  render();
+})();
+</script>
+</body>
+</html>

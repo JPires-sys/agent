@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Branch</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <main id="stage">
+    <canvas id="world" aria-label="Escritorio dos agentes"></canvas>
+
+    <header id="topbar">
+      <div class="brand"><span class="logo"></span><b>AGENT BRANCH</b></div>
+      <div id="chain" class="chain"><span class="chain-empty">nenhuma tarefa em andamento</span></div>
+      <div class="tools">
+        <button id="btn-follow" class="chip on" title="A camera acompanha o agente ao vivo">● Seguir ao vivo</button>
+        <button id="btn-names" class="chip on" title="Mostrar nomes">Nomes</button>
+        <button id="btn-zoom-out" class="chip sq" title="Afastar">−</button>
+        <button id="btn-zoom-in" class="chip sq" title="Aproximar">+</button>
+      </div>
+    </header>
+
+    <div id="hint">arraste para andar pelo escritorio · roda do mouse = zoom · clique num agente para escolhe-lo</div>
+
+    <div id="minimap-wrap"><canvas id="minimap" width="180" height="120"></canvas><span>MAPA</span></div>
+
+    <section id="output" class="collapsed">
+      <header id="output-head"><span class="dot"></span><b>SAIDA</b><span id="output-meta"></span><button id="output-toggle" class="chip sq">▴</button></header>
+      <pre id="output-body">Nenhuma resposta ainda.</pre>
+    </section>
+
+    <div id="tooltip" hidden></div>
+    <div id="toast" hidden></div>
+  </main>
+
+  <aside id="side">
+    <section class="card">
+      <h2>NOVA TAREFA</h2>
+      <textarea id="prompt" rows="4" placeholder="Ex.: crie um script hello.py, teste e documente no README"></textarea>
+      <div class="row">
+        <label>Modelo<select id="sel-model"></select></label>
+        <label>Esforco<select id="sel-effort"></select></label>
+      </div>
+      <div class="row">
+        <label>Agente principal<select id="sel-agent"></select></label>
+        <label>Permissoes<select id="sel-perm"></select></label>
+      </div>
+      <div class="row buttons">
+        <button id="btn-send" class="primary">ENVIAR <small>Ctrl+Enter</small></button>
+        <button id="btn-cancel" class="ghost" disabled>Cancelar</button>
+        <button id="btn-demo" class="ghost" title="Simula uma cadeia de agentes sem gastar tokens">Demo</button>
+      </div>
+      <p id="mode-note" class="note"></p>
+    </section>
+
+    <section class="card live-card" id="live-card">
+      <h2><span class="rec"></span>AO VIVO</h2>
+      <div class="live-body">
+        <canvas id="live-portrait" width="56" height="56"></canvas>
+        <div>
+          <div id="live-name">ninguem</div>
+          <div id="live-action">envie uma tarefa para comecar</div>
+          <div id="live-meta"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card grow">
+      <h2>LINHA DO TEMPO</h2>
+      <ol id="feed"></ol>
+    </section>
+
+    <section class="card">
+      <h2>HISTORICO</h2>
+      <ul id="history"><li class="empty">nada ainda</li></ul>
+    </section>
+  </aside>
+</div>
+<script src="game.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
