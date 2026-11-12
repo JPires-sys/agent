@@ -11,6 +11,7 @@ mensagem vira um evento que a interface recebe em tempo real.
 """
 
 import json
+import os
 import re
 import subprocess
 import threading
@@ -213,8 +214,104 @@ def executar_agente(prompt, model, effort, agent, emit, resume=None,
     return saida
 
 
+# ------------------------------------------------------- memoria e economia
+PASTA_MEMORIA = ".agentbranch"
+ARQ_MEMORIA = "memoria.md"
+MAX_ENTRADAS = 30          # tarefas guardadas no arquivo
+MEMORIA_NO_PROMPT = 2500   # caracteres da memoria enviados aos agentes
+_IGNORAR = {".git", "node_modules", "__pycache__", "dist", "build", ".venv", "venv",
+            PASTA_MEMORIA, ".idea", ".vscode", ".codex"}
+
+
+def _entradas(texto):
+    partes = [e.strip() for e in ("\n" + texto).split("\n## ") if e.strip()]
+    return ["## " + e for e in partes]
+
+
+def ler_memoria(cwd, limite=MEMORIA_NO_PROMPT):
+    """Ultimas anotacoes das tarefas anteriores nesta pasta (ou "")."""
+    try:
+        texto = (Path(cwd) / PASTA_MEMORIA / ARQ_MEMORIA).read_text(encoding="utf-8")
+    except (OSError, TypeError):
+        return ""
+    escolhidas, tamanho = [], 0
+    for e in reversed(_entradas(texto)):   # as mais novas primeiro, ate o limite
+        if tamanho + len(e) > limite:
+            break
+        escolhidas.insert(0, e)
+        tamanho += len(e)
+    return "\n\n".join(escolhidas)
+
+
+def gravar_memoria(cwd, tarefa, conversa, final, ok, arquivos):
+    """Anota a tarefa em .agentbranch/memoria.md (feito pelo Python: custa 0 tokens)."""
+    if not cwd:
+        return
+    pasta = Path(cwd) / PASTA_MEMORIA
+    arq = pasta / ARQ_MEMORIA
+
+    def um(t, n):
+        return " ".join(str(t or "").split())[:n]
+
+    cadeia = " -> ".join([conversa[0]["sender"]] + [c["receiver"] for c in conversa]) if conversa else ""
+    entrada = (f"## {time.strftime('%Y-%m-%d %H:%M')} - {'ok' if ok else 'ERRO'}\n"
+               f"- Pedido: {um(tarefa, 300)}\n- Cadeia: {cadeia}\n"
+               f"- Arquivos alterados: {', '.join(sorted(arquivos)) or 'nenhum'}\n"
+               f"- Resultado: {um(final, 600)}")
+    try:
+        pasta.mkdir(exist_ok=True)
+        antigo = arq.read_text(encoding="utf-8") if arq.exists() else ""
+        entradas = _entradas(antigo)[-(MAX_ENTRADAS - 1):]
+        arq.write_text("\n\n".join(entradas + [entrada]) + "\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
+def mapa_projeto(cwd, max_arquivos=80):
+    """Lista compacta dos arquivos da pasta, para os agentes nao precisarem procurar."""
+    if not cwd:
+        return ""
+    raiz, linhas, total = Path(cwd), [], 0
+    try:
+        for atual, pastas, arquivos in os.walk(raiz):
+            pastas[:] = sorted(d for d in pastas if d not in _IGNORAR)
+            for nome in sorted(arquivos):
+                total += 1
+                if len(linhas) < max_arquivos:
+                    f = Path(atual) / nome
+                    try:
+                        kb = max(1, f.stat().st_size // 1024)
+                    except OSError:
+                        kb = 0
+                    linhas.append(f"{f.relative_to(raiz).as_posix()} ({kb} KB)")
+    except OSError:
+        return ""
+    if total > len(linhas):
+        linhas.append(f"... e mais {total - len(linhas)} arquivos")
+    return "\n".join(linhas)
+
+
+_ECONOMIA = """== ECONOMIA DE TOKENS (obrigatorio) ==
+- Comece pela MEMORIA e pelo MAPA abaixo. Nao use Glob/ls para descobrir o que ja esta no mapa.
+- Leia so o que a sua parte exige. Prefira Grep e leitura parcial (offset/limit) a ler arquivo inteiro.
+- Nao releia um arquivo que voce ja leu nesta conversa, nem o que outro agente ja resumiu.
+- Resposta curta: sem repetir o pedido, sem copiar codigo no texto. :content com ate ~120 palavras."""
+
+
 # ------------------------------------------------------------------- roteador
-def _montar_prompt(atual, msg, tarefa, conversa, agentes):
+def _prompt_curto(atual, msg):
+    """Para um agente que ja participou desta tarefa (sessao retomada com --resume)."""
+    return f"""== NOVA MENSAGEM RECEBIDA ==
+({msg['performative']}
+  :sender {msg['sender']}
+  :receiver {atual}
+  :content "{msg['content']}")
+
+Voce ja tem o contexto desta tarefa: nao releia arquivos. Continue e termine com UMA mensagem
+FIPA-ACL (request para outro agente, inform/failure para {msg['sender']}, ou inform para usuario)."""
+
+
+def _montar_prompt(atual, msg, tarefa, conversa, agentes, memoria="", mapa=""):
     equipe = "\n".join(f"- {a['name']}: {a['description']}" for a in agentes
                        if a["name"] != atual)
     hist = []
@@ -242,6 +339,14 @@ a sua resposta com uma mensagem FIPA-ACL. Nao use a ferramenta Agent/Task.
 == EQUIPE ==
 {equipe}
 
+{_ECONOMIA}
+
+== MEMORIA (tarefas anteriores nesta pasta) ==
+{memoria or '(vazia)'}
+
+== MAPA DA PASTA ==
+{mapa or '(vazia)'}
+
 == COMO RESPONDER ==
 1. Faca a sua parte com as suas ferramentas.
 2. Termine com EXATAMENTE UMA mensagem FIPA-ACL, como ultima coisa da resposta:
@@ -264,13 +369,26 @@ def executar_tarefa(tarefa, model, effort, agente_inicial, emit, agentes,
     emit({"tipo": "mensagem", "de": USUARIO, "para": agente_inicial,
           "performativa": "request", "conteudo": tarefa})
     atual, custo = agente_inicial, 0.0
+    memoria, mapa, alterados = ler_memoria(cwd), mapa_projeto(cwd), set()
+    emit_ui = emit
+
+    def emit(ev):  # anota os arquivos editados para a memoria
+        if ev.get("tipo") == "ferramenta" and ev.get("ferramenta") in (
+                "Edit", "Write", "MultiEdit", "NotebookEdit"):
+            alterados.add(ev.get("texto") or "?")
+        emit_ui(ev)
+
+    def fim(ok, texto, resumo=None):
+        gravar_memoria(cwd, tarefa, conversa, resumo or texto, ok, alterados)
+        return ok, texto, custo
 
     for salto in range(1, max_saltos + 1):
         if job is not None and job.get("cancelado"):
-            return False, f"{ERRO_PREFIX} tarefa cancelada.", custo
+            return fim(False, f"{ERRO_PREFIX} tarefa cancelada.")
         emit({"tipo": "ao_vivo", "agente": atual, "de": msg["sender"], "salto": salto})
-        r = executar_agente(_montar_prompt(atual, msg, tarefa, conversa, agentes),
-                            model, effort, atual, emit, resume=sessoes.get(atual),
+        prompt = (_prompt_curto(atual, msg) if atual in sessoes else
+                  _montar_prompt(atual, msg, tarefa, conversa, agentes, memoria, mapa))
+        r = executar_agente(prompt, model, effort, atual, emit, resume=sessoes.get(atual),
                             perm=perm, job=job, cwd=cwd)
         custo += r["custo"]
         if r["session_id"]:
@@ -278,7 +396,7 @@ def executar_tarefa(tarefa, model, effort, agente_inicial, emit, agentes,
         emit({"tipo": "agente_fim", "agente": atual, "ok": r["ok"],
               "custo": r["custo"], "duracao": r["duracao"]})
         if not r["ok"]:
-            return False, r["texto"], custo
+            return fim(False, r["texto"])
 
         resp = _escolher_mensagem(parse_fipa(r["texto"]), atual, nomes)
         if resp is None:
@@ -293,10 +411,10 @@ def executar_tarefa(tarefa, model, effort, agente_inicial, emit, agentes,
         if resp["receiver"] == USUARIO:
             texto = _sem_fipa(r["texto"])
             final = resp["content"] if len(texto) < 40 else f"{texto}\n\n---\n{resp['content']}"
-            return resp["performative"] != "failure", final, custo
+            return fim(resp["performative"] != "failure", final, resp["content"])
         msg, atual = resp, resp["receiver"]
 
-    return False, f"{ERRO_PREFIX} limite de {max_saltos} trocas entre agentes atingido.", custo
+    return fim(False, f"{ERRO_PREFIX} limite de {max_saltos} trocas entre agentes atingido.")
 
 
 class TerminalContact:

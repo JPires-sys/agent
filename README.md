@@ -229,6 +229,7 @@ agent/
 - `parse_fipa(texto)`: parser tolerante de FIPA-ACL (aspas, blocos de código, `usuário/user`).
 - `executar_agente(...)`: um processo `claude -p` com stream ao vivo.
 - `executar_tarefa(...)`: o roteador.
+- `ler_memoria` / `gravar_memoria` / `mapa_projeto`: memória entre tarefas e mapa da pasta.
 - `TerminalContact`: fila de tarefas com eventos numerados (`poll`), `cancelar` e `historico`.
 
 ## Criar um agente novo
@@ -249,13 +250,22 @@ O roteador já explica o protocolo FIPA para cada agente e lista a equipe com as
 
 ## Contexto entre execuções
 
-Cada tarefa começa sessões novas. **Dentro de uma tarefa**, cada agente lembra das próprias falas: quando o resultado volta para o `agent-007`, ele é retomado com `--resume`. Já **entre tarefas**, e ao fechar o app, a conversa se perde.
+Os agentes não precisam reler o projeto inteiro a cada tarefa. O roteador cuida disso de três formas, e nenhuma delas gasta tokens para ser mantida:
 
-O que sempre persiste: os arquivos do projeto, os prompts dos agentes e um `CLAUDE.md` na raiz (o Claude Code lê esse arquivo automaticamente em toda sessão).
+| Recurso | O que é | Onde fica |
+|---|---|---|
+| **Memória** | Depois de cada tarefa, o Python anota a data, o pedido, a cadeia de agentes, os arquivos alterados e o resultado. As anotações mais recentes (até 2.500 caracteres) entram no prompt da próxima tarefa. | `<pasta de trabalho>/.agentbranch/memoria.md` |
+| **Mapa da pasta** | Lista dos arquivos da pasta de trabalho com o tamanho (até 80 arquivos), montada pelo Python e enviada no prompt. Os agentes não precisam usar `Glob`/`ls` para se localizar. | gerado a cada tarefa |
+| **`CLAUDE.md`** | Resumo fixo do projeto e das regras. O Claude Code carrega esse arquivo sozinho em toda sessão. | raiz da pasta de trabalho |
 
-Formas de ter mais memória:
-1. Manter um `CLAUDE.md` ou o README com o resumo do projeto e as decisões tomadas. O `agent-docs` pode atualizar isso no fim de cada tarefa.
-2. Salvar os `session_id` de cada agente num arquivo e usar `--resume` na próxima tarefa (ainda não implementado).
+A memória guarda as últimas 30 tarefas e vale por pasta de trabalho. Ela continua lá depois de fechar o app. Para "esquecer" tudo, apague a pasta `.agentbranch/`. Você também pode editar o `memoria.md` à mão para registrar decisões.
+
+**Economia de tokens:**
+- Todo agente recebe regras de economia: começar pela memória e pelo mapa, usar `Grep` e leitura parcial em vez de ler arquivos inteiros, não reler o que já leu e responder curto.
+- **Dentro de uma tarefa**, quando um agente é acionado de novo (por exemplo, o `agent-007` recebendo o resultado), a sessão dele é retomada com `--resume` e ele recebe só a mensagem nova, de uns 300 caracteres, em vez do prompt completo.
+- **Entre tarefas**, as sessões não são retomadas de propósito: o histórico inteiro seria reenviado a cada chamada e ficaria cada vez mais caro. A memória resumida cumpre esse papel por uma fração do custo.
+
+Para aproveitar melhor: crie um `CLAUDE.md` curto na sua pasta de trabalho com o resumo do projeto. O deste repositório serve de exemplo.
 
 ## Gerar o executável
 
@@ -287,7 +297,7 @@ O resultado é `dist/AgentBranch.exe` (cerca de 13 MB). O exe procura a pasta `.
 
 ## Próximos passos
 
-1. **Memória entre tarefas:** guardar os `session_id` por agente (`sessions.json`) e retomar com `--resume`.
+1. **Continuar a mesma conversa:** uma opção para retomar as sessões da tarefa anterior com `--resume` (mais caro, mas útil para tarefas longas).
 2. **Log persistente:** salvar os eventos em `logs/AAAA-MM-DD.jsonl` e criar um modo "replay" no escritório.
 3. **Painel de custo:** um total por dia e por agente (os eventos já trazem `custo`).
 4. **Agentes em paralelo:** permitir `request` para dois agentes ao mesmo tempo. O escritório já suporta vários agentes ao vivo; falta o roteador.
