@@ -132,3 +132,9 @@ select { background: var(--field); border: 1px solid var(--line); border-radius:
   #output { left: 12px; bottom: 150px; }
   .tools .chip:not(.sq):not(#btn-follow) { display: none; }
 }
+
+/* pasta de trabalho */
+.folder { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; font-size: 11px; color: var(--dim); }
+.folder-row { display: flex; gap: 6px; }
+#folder-path { flex: 1; min-width: 0; background: var(--field); border: 1px solid var(--line); border-radius: 9px; padding: 6px 8px; outline: none; color: var(--text); font: inherit; font-size: 11px; text-overflow: ellipsis; }
+#btn-folder { white-space: nowrap; font-size: 11px; border-radius: 9px; border: 1px solid var(--line); padding: 6px 10px; cursor: pointer; transition: 0.15s; }

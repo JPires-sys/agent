@@ -39,13 +39,7 @@ VOCE → agent-007 → agent-coder → agent-tester → agent-docs → agent-007
 pip install pywebview python-dotenv
 ```
 
-Arquivo `.env` na raiz (não vai para o git):
-
-```
-route_terminal=C:\caminho\da\pasta\onde\os\agentes\vao\trabalhar
-```
-
-Se `route_terminal` estiver vazio, os agentes trabalham na pasta do projeto.
+A pasta onde os agentes trabalham **não vem mais do `.env`**: ela é escolhida na própria interface (veja [Pasta de trabalho](#pasta-de-trabalho)). O `.env` na raiz continua opcional e não vai para o git.
 
 ## Como rodar
 
@@ -74,13 +68,29 @@ python home.py --debug
 | **Escritório** | O mundo em pixel art. **Arraste com o mouse** para andar pelo cenário, use a **roda do mouse** para zoom (2x a 6x) e **WASD/setas** para mover a câmera. Clicar num agente o escolhe como agente principal. Passar o mouse mostra a descrição dele. |
 | **Barra do topo** | A cadeia da tarefa atual (`VOCE → 007 → CODER ●`). O nó pulsando é o agente ao vivo. Botões: **Seguir ao vivo** (a câmera acompanha o agente ativo; arrastar desliga), **Nomes** e zoom. |
 | **Minimapa** | Canto inferior esquerdo. Clique ou arraste para pular a câmera. O ponto vermelho piscando é o agente ao vivo. |
-| **NOVA TAREFA** | Prompt, modelo, esforço, agente principal e permissões. **ENVIAR** ou `Ctrl+Enter`. **Cancelar** encerra o processo do agente que está rodando. |
+| **NOVA TAREFA** | Pasta de trabalho, prompt, modelo, esforço, agente principal e permissões. **ENVIAR** ou `Ctrl+Enter`. **Cancelar** encerra o processo do agente que está rodando. |
 | **AO VIVO** | Retrato do agente ativo, o que ele está fazendo agora (`Edit home.py`, `Bash pytest`...), há quanto tempo e em qual troca da cadeia. |
 | **LINHA DO TEMPO** | Tudo o que aconteceu: quem foi acionado, cada mensagem FIPA (`request`/`inform`/`failure`) com o conteúdo, ferramentas usadas, tempo e custo de cada agente. |
 | **HISTÓRICO** | Tarefas enviadas. Clique para rever a resposta. |
 | **SAÍDA** | Resposta final, com efeito de máquina de escrever. Clique no texto para pular a animação. |
 
 Se o agente ao vivo estiver fora da tela, uma **seta vermelha** na borda aponta para ele.
+
+### Pasta de trabalho
+
+No card **NOVA TAREFA** há o campo **Pasta de trabalho** (só leitura) e o botão **Escolher pasta**.
+
+- O botão abre o seletor de pastas do sistema. A pasta escolhida vira o diretório (`cwd`) do `claude -p` nos **próximos envios**. Assim os agentes podem ler e alterar arquivos de outros projetos.
+- Se houver uma tarefa rodando, ela continua na pasta antiga até terminar.
+- A escolha fica salva em `.agentbranch.json`, na pasta do projeto, no formato `{"pasta": "..."}`. Esse arquivo é ignorado pelo git.
+- Se o arquivo não existir, estiver inválido ou a pasta salva não existir mais, vale a pasta do projeto.
+- Os agentes continuam vindo de `.claude/agents` **do projeto Agent Branch**, não da pasta escolhida.
+
+Para testar essa parte (não precisa de pytest):
+
+```bash
+python tests/test_pasta.py
+```
 
 ## O escritório
 
@@ -201,7 +211,9 @@ agent/
 │   └── app.js           # painel, linha do tempo, ponte com o Python e modo Demo
 ├── .claude/agents/      # definição dos agentes (markdown + frontmatter)
 ├── testes-agents/       # arquivos criados pelos agentes em testes (não são o núcleo)
-├── .env                 # route_terminal (ignorado pelo git)
+├── tests/test_pasta.py  # testes da pasta de trabalho
+├── .agentbranch.json    # pasta de trabalho escolhida (ignorado pelo git)
+├── .env                 # opcional (ignorado pelo git)
 └── README.md
 ```
 
@@ -267,6 +279,7 @@ O resultado é `dist/AgentBranch.exe` (cerca de 13 MB). O exe procura a pasta `.
 
 ## Pontos de atenção
 
+- **Pasta de trabalho:** confira a pasta mostrada no card NOVA TAREFA antes de enviar. Os agentes editam arquivos **nela**, não no projeto Agent Branch.
 - **Permissões:** `acceptEdits` deixa os agentes **editarem arquivos sem pedir confirmação**. `bypassPermissions` libera **tudo**, inclusive comandos no terminal. Use as duas só em pastas versionadas pelo git.
 - Cada salto da cadeia é um processo `claude -p` novo, que leva alguns segundos para iniciar e custa tokens. O custo de cada agente aparece na linha do tempo.
 - O formato FIPA-ACL é uma convenção de texto. Se o modelo errar o formato, o roteador tenta entender e, em último caso, devolve o texto para quem pediu.

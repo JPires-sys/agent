@@ -11,7 +11,6 @@ mensagem vira um evento que a interface recebe em tempo real.
 """
 
 import json
-import os
 import re
 import subprocess
 import threading
@@ -146,7 +145,7 @@ def executar_agente(prompt, model, effort, agent, emit, resume=None,
         proc = subprocess.Popen(
             cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, encoding="utf-8", errors="replace",
-            cwd=cwd or os.getenv("route_terminal") or None,
+            cwd=cwd or None,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except FileNotFoundError:

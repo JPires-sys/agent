@@ -10,7 +10,7 @@ mensagens FIPA-ACL entre eles; a interface busca os eventos a cada 150 ms e
 mostra ao vivo qual agente esta trabalhando.
 """
 
-import os
+import json
 import sys
 from pathlib import Path
 
@@ -43,14 +43,33 @@ MODELS = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fa
 EFFORTS = ["low", "medium", "high", "xhigh", "max"]
 PERMS = ["acceptEdits", "bypassPermissions"]
 AGENTE_PADRAO = "agent-007"
+CONFIG_FILE = BASE_DIR / ".agentbranch.json"
+
+
+def _carregar_pasta():
+    """Ultima pasta de trabalho salva; BASE_DIR se nao houver ou nao existir."""
+    try:
+        pasta = json.loads(CONFIG_FILE.read_text(encoding="utf-8")).get("pasta")
+        if pasta and Path(pasta).is_dir():
+            return str(Path(pasta).resolve())
+    except (OSError, ValueError, AttributeError):
+        pass
+    return str(BASE_DIR)
+
+
+def _salvar_pasta(pasta):
+    try:
+        CONFIG_FILE.write_text(json.dumps({"pasta": pasta}, ensure_ascii=False, indent=2),
+                               encoding="utf-8")
+    except OSError:
+        pass
 
 
 class Api:
     """Metodos chamados pelo JavaScript (window.pywebview.api.*)."""
 
     def __init__(self):
-        cwd = os.getenv("route_terminal") or str(BASE_DIR)
-        self._tc = TerminalContact(AGENTS_DIR, cwd=cwd)
+        self._tc = TerminalContact(AGENTS_DIR, cwd=_carregar_pasta())
 
     def config(self):
         agentes = self._tc.agentes()
@@ -58,7 +77,30 @@ class Api:
         padrao = AGENTE_PADRAO if AGENTE_PADRAO in nomes else (nomes[0] if nomes else "")
         agentes.sort(key=lambda a: (a["name"] != AGENTE_PADRAO, a["name"]))
         return {"agents": agentes, "models": MODELS, "efforts": EFFORTS, "perms": PERMS,
-                "defaultAgent": padrao, "base": str(BASE_DIR)}
+                "defaultAgent": padrao, "base": str(BASE_DIR), "pasta": self._tc.cwd}
+
+    def escolher_pasta(self):
+        """Abre o seletor de pasta nativo. Retorna o caminho ou "" se cancelado."""
+        import webview
+        if not webview.windows:
+            return ""
+        escolha = webview.windows[0].create_file_dialog(
+            webview.FOLDER_DIALOG, directory=self._tc.cwd or str(BASE_DIR))
+        if not escolha:
+            return ""
+        return str(escolha[0] if isinstance(escolha, (list, tuple)) else escolha)
+
+    def set_pasta(self, caminho):
+        """Define a pasta de trabalho (cwd do claude -p). Vale para os proximos envios."""
+        caminho = str(caminho or "").strip()
+        if not caminho:
+            return {"erro": "nenhuma pasta informada"}
+        pasta = Path(caminho).expanduser()
+        if not pasta.is_dir():
+            return {"erro": f"pasta inexistente: {caminho}"}
+        self._tc.cwd = str(pasta.resolve())
+        _salvar_pasta(self._tc.cwd)
+        return {"pasta": self._tc.cwd}
 
     def send(self, data):
         data = data or {}

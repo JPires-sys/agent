@@ -34,6 +34,7 @@
       $('#mode-note').classList.add('warn');
     }
     S.agents = cfg.agents;
+    showFolder(cfg.pasta || cfg.base || '');
     fill('#sel-model', cfg.models, cfg.models[0]);
     fill('#sel-effort', cfg.efforts, 'medium');
     fill('#sel-agent', cfg.agents.map((a) => a.name), cfg.defaultAgent || 'agent-007');
@@ -167,6 +168,18 @@
     twTimer = setInterval(() => { i = Math.min(s.length, i + Math.max(6, Math.round(s.length / 120))); body.textContent = s.slice(0, i); body.scrollTop = body.scrollHeight; if (i >= s.length) clearInterval(twTimer); }, 16);
     body.onclick = () => { clearInterval(twTimer); body.textContent = s; };
   }
+  function showFolder(p) { const el = $('#folder-path'); el.value = p || '(nenhuma)'; el.title = p || ''; }
+  async function chooseFolder() {
+    if (S.demo || !api) { toast('Escolher pasta precisa do app (backend Python).'); return; }
+    try {
+      const caminho = await api.escolher_pasta();
+      if (!caminho) return;
+      const r = await api.set_pasta(caminho);
+      if (r && r.erro) { toast(esc(r.erro)); return; }
+      showFolder(r.pasta);
+      toast(S.job ? 'Pasta trocada. Vale para os proximos envios.' : `Pasta: <b>${esc(r.pasta)}</b>`);
+    } catch (e) { toast('Falha ao escolher pasta: ' + esc(e)); }
+  }
   function setRunning(on) { $('#btn-send').disabled = on; $('#btn-cancel').disabled = !on; $('#btn-demo').disabled = on; }
   let toastT = null;
   function toast(html) { const t = $('#toast'); t.innerHTML = html; t.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => (t.hidden = true), 2200); }
@@ -240,6 +253,7 @@
   function bindUi() {
     $('#btn-send').onclick = send;
     $('#btn-cancel').onclick = cancel;
+    $('#btn-folder').onclick = chooseFolder;
     $('#btn-demo').onclick = () => { Game.setFollow(true); runDemo($('#prompt').value.trim() || 'criar um script hello.py, testar e documentar', $('#sel-agent').value); };
     $('#prompt').addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); send(); } });
     $('#btn-follow').onclick = () => Game.setFollow(!Game.getFollow());

@@ -40,6 +40,13 @@
   <aside id="side">
     <section class="card">
       <h2>NOVA TAREFA</h2>
+      <div class="folder">
+        <label for="folder-path">Pasta de trabalho</label>
+        <div class="folder-row">
+          <input id="folder-path" type="text" readonly value="..." title="Pasta onde os agentes trabalham">
+          <button id="btn-folder" class="ghost" title="Escolher a pasta onde os agentes vao trabalhar">Escolher pasta</button>
+        </div>
+      </div>
       <textarea id="prompt" rows="4" placeholder="Ex.: crie um script hello.py, teste e documente no README"></textarea>
       <div class="row">
         <label>Modelo<select id="sel-model"></select></label>
