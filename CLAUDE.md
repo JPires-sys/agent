@@ -1,10 +1,11 @@
-# Agent Branch — resumo para os agentes
+# agents0.7 — resumo para os agentes
 
 App desktop (pywebview) com um escritório em pixel art onde cada personagem é um agente do Claude Code.
 
-- `home.py`: janela + classe `Api` chamada pelo JavaScript (config, send, cancel, poll, pasta de trabalho).
+- `home.py`: janela + classe `Api` chamada pelo JavaScript (config, send, cancel, poll, pasta, mapa, criar/editar/excluir agente, relatorio .docx/.txt).
+- `relatorio.py`: relatorio da tarefa em Word (.docx) ou texto (.txt), sem dependencias.
 - `terminalContact.py`: roteador. Roda cada agente num `claude -p` (stream-json), lê a mensagem FIPA-ACL no fim da resposta e aciona o próximo. Também grava a memória em `.agentbranch/memoria.md`.
-- `front/game.js`: mundo pixel art (mapa, móveis, personagens, câmera). `front/app.js`: painel, linha do tempo, demo. `front/index.html`, `front/style.css`.
+- `front/game.js`: mundo pixel art com 3 mapas (THEMES: escritorio, espiao, gotica), móveis, personagens, câmera. `front/app.js`: painel, linha do tempo, demo. `front/index.html`, `front/style.css`.
 - `.claude/agents/*.md`: definição dos agentes (007 orquestra; decider, architect, coder, tester, reviewer, docs).
 - `README.md`: documentação completa. Leia só a seção de que precisar.
 

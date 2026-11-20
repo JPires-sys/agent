@@ -8,3 +8,4 @@ dist/
 *.spec
 .agentbranch.json
 .agentbranch/
+.lixeira-agentes/

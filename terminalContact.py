@@ -38,27 +38,58 @@ _RE_CHAVE = re.compile(r"(?:^|\s):(sender|receiver|content|reply-with|in-reply-t
 
 # --------------------------------------------------------------------- agentes
 def ler_agentes(pasta):
-    """Le .claude/agents/*.md e devolve [{name, description, tools}]."""
+    """Le <pasta>/*.md e devolve [{name, description, tools, prompt}].
+
+    'prompt' e o corpo do .md (o que vem depois do cabecalho entre ---)."""
     pasta = Path(pasta)
     agentes = []
     if not pasta.is_dir():
         return agentes
     for arq in sorted(pasta.glob("*.md")):
-        meta = {"name": arq.stem, "description": "", "tools": ""}
+        meta = {"name": arq.stem, "description": "", "tools": "", "model": ""}
         try:
             texto = arq.read_text(encoding="utf-8")
         except OSError:
             continue
-        if texto.startswith("---"):
-            cab = texto.split("---", 2)[1] if texto.count("---") >= 2 else ""
+        corpo = texto
+        if texto.startswith("---") and texto.count("---") >= 2:
+            _, cab, corpo = texto.split("---", 2)
             for linha in cab.splitlines():
                 if ":" in linha:
                     k, v = linha.split(":", 1)
                     k = k.strip().lower()
                     if k in meta:
                         meta[k] = v.strip().strip("`")
+        meta["prompt"] = corpo.strip()
         agentes.append(meta)
     return agentes
+
+
+# caracteres que o cmd.exe interpreta (quando o claude e um .cmd do npm): viram \uXXXX no JSON
+_CMD_ESPECIAIS = {c: "\\u%04x" % ord(c) for c in "&|<>^%!'`"}
+
+
+def _definicao_json(agente):
+    """JSON para --agents so com o agente atual: {name: {description, prompt, tools}}.
+
+    Assim o claude -p acha o agente mesmo quando a pasta (path_agent) nao e o
+    .claude/agents do cwd. Os caracteres especiais do cmd.exe dentro dos textos
+    viram \\uXXXX (JSON valido e seguro na linha de comando do Windows)."""
+    if not agente:
+        return None
+    d = {"description": agente.get("description") or agente["name"],
+         "prompt": agente.get("prompt") or ""}
+    tools = [t.strip() for t in str(agente.get("tools") or "").split(",") if t.strip()]
+    if tools:
+        d["tools"] = tools
+    texto = json.dumps({agente["name"]: d}, ensure_ascii=True, separators=(",", ":"))
+    # so troca dentro das strings: as aspas da estrutura do JSON ficam como estao
+    partes = re.split(r'("(?:[^"\\]|\\.)*")', texto)
+    for i in range(1, len(partes), 2):
+        miolo = partes[i][1:-1].replace('\\"', "\\u0022")   # aspas internas ja vem como \"
+        miolo = "".join(_CMD_ESPECIAIS.get(c, c) for c in miolo)
+        partes[i] = '"' + miolo + '"'
+    return "".join(partes)
 
 
 # ------------------------------------------------------------------- FIPA-ACL
@@ -131,17 +162,35 @@ def _resumo_ferramenta(nome, entrada):
     return ""
 
 
+FERRAMENTAS_EDICAO = ("Edit", "Write", "MultiEdit", "NotebookEdit")
+
+
+def _tokens_de(usage):
+    """{entrada, saida, cache} a partir do 'usage' da API (cache = leitura + criacao)."""
+    u = usage or {}
+    n = lambda k: int(u.get(k) or 0)  # noqa: E731
+    return {"entrada": n("input_tokens"), "saida": n("output_tokens"),
+            "cache": n("cache_read_input_tokens") + n("cache_creation_input_tokens")}
+
+
 def executar_agente(prompt, model, effort, agent, emit, resume=None,
-                    perm="acceptEdits", job=None, cwd=None):
-    """Roda um agente e emite eventos ao vivo. Retorna dict com o resultado."""
+                    perm="acceptEdits", job=None, cwd=None, definicao=None):
+    """Roda um agente e emite eventos ao vivo. Retorna dict com o resultado.
+
+    definicao: JSON de _definicao_json (vai em --agents, para achar o agente
+    fora do .claude/agents do cwd)."""
     cmd = ["claude", "-p", "--output-format", "stream-json", "--verbose",
            "--model", model, "--effort", effort, "--agent", agent,
            "--permission-mode", perm]
+    if definicao:
+        cmd += ["--agents", definicao]
     if resume:
         cmd += ["--resume", resume]
     # delegacao so pelo roteador (assim todo acionamento aparece ao vivo)
     cmd += ["--disallowedTools", "Agent", "Task"]
-    saida = {"texto": "", "ok": False, "session_id": resume, "custo": 0.0, "duracao": 0}
+    saida = {"texto": "", "ok": False, "session_id": resume, "custo": 0.0, "duracao": 0,
+             "tokens": {"entrada": 0, "saida": 0, "cache": 0}}
+    vistos = {}   # message.id -> ultimo usage ja contado (o mesmo id vem em varios eventos)
     try:
         proc = subprocess.Popen(
             cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -180,12 +229,30 @@ def executar_agente(prompt, model, effort, agent, emit, resume=None,
         if tipo == "system" and ev.get("subtype") == "init":
             saida["session_id"] = ev.get("session_id") or saida["session_id"]
         elif tipo == "assistant":
-            for bloco in (ev.get("message") or {}).get("content") or []:
+            mensagem = ev.get("message") or {}
+            if mensagem.get("usage"):
+                agora = _tokens_de(mensagem["usage"])
+                antes = vistos.get(mensagem.get("id") or id(mensagem),
+                                   {"entrada": 0, "saida": 0, "cache": 0})
+                delta = {k: max(0, agora[k] - antes[k]) for k in agora}
+                vistos[mensagem.get("id") or id(mensagem)] = {k: max(agora[k], antes[k]) for k in agora}
+                if any(delta.values()):
+                    for k in delta:
+                        saida["tokens"][k] += delta[k]
+                    emit(dict(delta, tipo="tokens", agente=agent))
+            for bloco in mensagem.get("content") or []:
                 bt = bloco.get("type")
                 if bt == "tool_use":
                     nome = bloco.get("name", "")
-                    emit({"tipo": "ferramenta", "agente": agent, "ferramenta": nome,
-                          "texto": _resumo_ferramenta(nome, bloco.get("input"))})
+                    entrada = bloco.get("input") or {}
+                    ev_f = {"tipo": "ferramenta", "agente": agent, "ferramenta": nome,
+                            "texto": _resumo_ferramenta(nome, entrada)}
+                    if nome in FERRAMENTAS_EDICAO:
+                        caminho = entrada.get("file_path") or entrada.get("notebook_path") or ""
+                        if caminho:   # caminho completo (relativo conta do cwd do agente)
+                            p = Path(str(caminho))
+                            ev_f["arquivo"] = str(p if p.is_absolute() or not cwd else Path(cwd) / p)
+                    emit(ev_f)
                 elif bt == "text" and bloco.get("text", "").strip():
                     primeira = bloco["text"].strip().splitlines()[0]
                     if not _RE_INICIO.match(primeira):
@@ -199,6 +266,8 @@ def executar_agente(prompt, model, effort, agent, emit, resume=None,
             saida["session_id"] = ev.get("session_id") or saida["session_id"]
             saida["custo"] = float(ev.get("total_cost_usd") or 0)
             saida["duracao"] = int(ev.get("duration_ms") or 0)
+            if ev.get("usage"):   # o total do result e o valor oficial deste processo
+                saida["tokens"] = _tokens_de(ev["usage"])
     proc.wait()
     if job is not None:
         job["proc"] = None
@@ -217,10 +286,21 @@ def executar_agente(prompt, model, effort, agent, emit, resume=None,
 # ------------------------------------------------------- memoria e economia
 PASTA_MEMORIA = ".agentbranch"
 ARQ_MEMORIA = "memoria.md"
+PASTA_RELATORIOS = "relatorios"
 MAX_ENTRADAS = 30          # tarefas guardadas no arquivo
 MEMORIA_NO_PROMPT = 2500   # caracteres da memoria enviados aos agentes
 _IGNORAR = {".git", "node_modules", "__pycache__", "dist", "build", ".venv", "venv",
             PASTA_MEMORIA, ".idea", ".vscode", ".codex"}
+
+
+def _relativo(caminho, cwd):
+    """Caminho relativo ao cwd (com /), ou o proprio caminho se estiver fora dele."""
+    if not caminho:
+        return ""
+    try:
+        return Path(caminho).resolve().relative_to(Path(cwd).resolve()).as_posix()
+    except (ValueError, OSError, TypeError):
+        return str(caminho).replace("\\", "/")
 
 
 def _entradas(texto):
@@ -311,6 +391,21 @@ Voce ja tem o contexto desta tarefa: nao releia arquivos. Continue e termine com
 FIPA-ACL (request para outro agente, inform/failure para {msg['sender']}, ou inform para usuario)."""
 
 
+MAX_COBRAR_FIPA = 2   # quantas vezes o roteador pede de novo a mensagem FIPA-ACL
+
+
+def _prompt_cobrar_fipa(atual, msg, tentativa):
+    """Retomada da sessao quando o agente terminou sem mensagem FIPA-ACL valida."""
+    return f"""== ROTEADOR: FALTOU A MENSAGEM FIPA-ACL (tentativa {tentativa} de {MAX_COBRAR_FIPA}) ==
+A sua ultima resposta nao terminou com uma mensagem FIPA-ACL valida, entao ninguem a recebeu.
+A comunicacao entre os agentes e OBRIGATORIAMENTE em FIPA-ACL. Nao refaca o trabalho:
+responda SO com UMA mensagem, por exemplo:
+(inform :sender {atual} :receiver {msg['sender']} :content "<resultado>")
+ou (request :sender {atual} :receiver <agente> :content "<o que fazer>")
+ou (failure :sender {atual} :receiver {msg['sender']} :content "<motivo>")
+O :receiver precisa ser um agente da equipe (diferente de voce) ou usuario."""
+
+
 def _montar_prompt(atual, msg, tarefa, conversa, agentes, memoria="", mapa=""):
     equipe = "\n".join(f"- {a['name']}: {a['description']}" for a in agentes
                        if a["name"] != atual)
@@ -358,10 +453,25 @@ a sua resposta com uma mensagem FIPA-ACL. Nao use a ferramenta Agent/Task.
 """
 
 
+_APELIDOS_MODELO = {"opus": "claude-opus-5-5", "sonnet": "claude-sonnet-5-5",
+                    "haiku": "claude-haiku-5-5", "fable": "claude-fable-5-1"}
+
+
+def modelo_do_agente(agente, padrao):
+    """Modelo do frontmatter do agente (apelido ou id completo); senao o padrao da tela."""
+    m = str((agente or {}).get("model") or "").strip().lower()
+    if not m or m == "inherit":
+        return padrao
+    if m in _APELIDOS_MODELO:
+        return _APELIDOS_MODELO[m]
+    return m if re.fullmatch(r"claude-[a-z0-9.-]+", m) else padrao
+
+
 def executar_tarefa(tarefa, model, effort, agente_inicial, emit, agentes,
                     perm="acceptEdits", job=None, cwd=None, max_saltos=MAX_SALTOS):
     """Roda a cadeia de agentes. Retorna (ok, resposta_final, custo_total)."""
     nomes = {a["name"] for a in agentes}
+    por_nome = {a["name"]: a for a in agentes}
     sessoes, conversa = {}, []
     msg = {"performative": "request", "sender": USUARIO, "receiver": agente_inicial,
            "content": tarefa}
@@ -373,10 +483,22 @@ def executar_tarefa(tarefa, model, effort, agente_inicial, emit, agentes,
     emit_ui = emit
 
     def emit(ev):  # anota os arquivos editados para a memoria
-        if ev.get("tipo") == "ferramenta" and ev.get("ferramenta") in (
-                "Edit", "Write", "MultiEdit", "NotebookEdit"):
-            alterados.add(ev.get("texto") or "?")
+        if ev.get("tipo") == "ferramenta" and ev.get("ferramenta") in FERRAMENTAS_EDICAO:
+            alterados.add(_relativo(ev.get("arquivo"), cwd) or ev.get("texto") or "?")
         emit_ui(ev)
+
+    def rodar(prompt_agente):
+        nonlocal custo
+        r = executar_agente(prompt_agente, modelo_do_agente(por_nome.get(atual), model), effort,
+                            atual, emit, resume=sessoes.get(atual),
+                            perm=perm, job=job, cwd=cwd,
+                            definicao=_definicao_json(por_nome.get(atual)))
+        custo += r["custo"]
+        if r["session_id"]:
+            sessoes[atual] = r["session_id"]
+        emit({"tipo": "agente_fim", "agente": atual, "ok": r["ok"], "custo": r["custo"],
+              "duracao": r["duracao"], "tokens": r["tokens"]})
+        return r
 
     def fim(ok, texto, resumo=None):
         gravar_memoria(cwd, tarefa, conversa, resumo or texto, ok, alterados)
@@ -388,28 +510,33 @@ def executar_tarefa(tarefa, model, effort, agente_inicial, emit, agentes,
         emit({"tipo": "ao_vivo", "agente": atual, "de": msg["sender"], "salto": salto})
         prompt = (_prompt_curto(atual, msg) if atual in sessoes else
                   _montar_prompt(atual, msg, tarefa, conversa, agentes, memoria, mapa))
-        r = executar_agente(prompt, model, effort, atual, emit, resume=sessoes.get(atual),
-                            perm=perm, job=job, cwd=cwd)
-        custo += r["custo"]
-        if r["session_id"]:
-            sessoes[atual] = r["session_id"]
-        emit({"tipo": "agente_fim", "agente": atual, "ok": r["ok"],
-              "custo": r["custo"], "duracao": r["duracao"]})
+        r = rodar(prompt)
         if not r["ok"]:
             return fim(False, r["texto"])
 
         resp = _escolher_mensagem(parse_fipa(r["texto"]), atual, nomes)
+        tentativa, texto_sem = 0, r["texto"]
+        # FIPA-ACL e obrigatorio: sem mensagem valida, cobra o agente na mesma sessao
+        while resp is None and tentativa < MAX_COBRAR_FIPA and sessoes.get(atual):
+            if job is not None and job.get("cancelado"):
+                return fim(False, f"{ERRO_PREFIX} tarefa cancelada.")
+            tentativa += 1
+            emit({"tipo": "fipa_cobrar", "agente": atual, "tentativa": tentativa})
+            r = rodar(_prompt_cobrar_fipa(atual, msg, tentativa))
+            if not r["ok"]:
+                return fim(False, r["texto"])
+            resp = _escolher_mensagem(parse_fipa(r["texto"]), atual, nomes)
         if resp is None:
-            # esqueceu o FIPA: devolve automaticamente para quem pediu
-            destino = msg["sender"]
-            resp = {"performative": "inform", "sender": atual, "receiver": destino,
-                    "content": _sem_fipa(r["texto"])[:3000] or "(sem texto)"}
+            # nao respondeu em FIPA-ACL: o roteador devolve um failure para quem pediu
+            resp = {"performative": "failure", "sender": atual, "receiver": msg["sender"],
+                    "content": (f"{atual} nao respondeu em FIPA-ACL. Resposta sem mensagem: "
+                                + (_sem_fipa(texto_sem)[:2500] or "(sem texto)"))}
         resp["sender"] = atual
         conversa.append(resp)
         emit({"tipo": "mensagem", "de": atual, "para": resp["receiver"],
               "performativa": resp["performative"], "conteudo": resp["content"]})
         if resp["receiver"] == USUARIO:
-            texto = _sem_fipa(r["texto"])
+            texto = _sem_fipa(texto_sem)
             final = resp["content"] if len(texto) < 40 else f"{texto}\n\n---\n{resp['content']}"
             return fim(resp["performative"] != "failure", final, resp["content"])
         msg, atual = resp, resp["receiver"]
@@ -436,6 +563,9 @@ class TerminalContact:
             self.seq += 1
             ev = dict(ev, seq=self.seq, job=job_id, t=time.time())
             self.eventos.append(ev)
+            job = self.jobs.get(job_id)
+            if job is not None:   # log completo da tarefa (para o relatorio .docx)
+                job.setdefault("log", []).append(ev)
             if len(self.eventos) > 4000:
                 del self.eventos[:1000]
 
@@ -447,7 +577,8 @@ class TerminalContact:
         job_id = f"t{len(self.jobs) + 1}"
         job = {"id": job_id, "prompt": prompt, "agente": agent, "model": model,
                "effort": effort, "status": "running", "resposta": None,
-               "criado": time.time(), "proc": None, "cancelado": False, "custo": 0.0}
+               "criado": time.time(), "proc": None, "cancelado": False, "custo": 0.0,
+               "tokens": {"entrada": 0, "saida": 0, "cache": 0}, "log": []}
         self.jobs[job_id] = job
         threading.Thread(target=self._rodar, args=(job, perm), daemon=True).start()
         return job_id
@@ -463,9 +594,43 @@ class TerminalContact:
                 self.agentes(), perm=perm, job=job, cwd=self.cwd)
         except Exception as erro:  # nunca deixa a interface presa em "rodando"
             ok, resposta, custo = False, f"{ERRO_PREFIX} {erro}", 0.0
-        job.update(status="done" if ok else "error", resposta=resposta, custo=custo)
+        tokens = {"entrada": 0, "saida": 0, "cache": 0}
+        with self.lock:
+            for ev in job.get("log", []):
+                if ev.get("tipo") == "agente_fim":
+                    for k in tokens:
+                        tokens[k] += int((ev.get("tokens") or {}).get(k) or 0)
+        duracao = int((time.time() - t0) * 1000)
+        job.update(status="done" if ok else "error", resposta=resposta, custo=custo,
+                   tokens=tokens, duracao=duracao)
+        job["arquivo"] = self._gravar_relatorio(job)
         emit({"tipo": "tarefa_fim", "ok": ok, "resposta": resposta, "custo": custo,
-              "duracao": int((time.time() - t0) * 1000)})
+              "duracao": duracao, "tokens": tokens, "arquivo": job["arquivo"]})
+
+    def _gravar_relatorio(self, job):
+        """Gera .agentbranch/relatorios/relatorio-<id>.docx na pasta de trabalho.
+        Retorna o caminho ou None (nunca levanta: o relatorio e um extra)."""
+        if not self.cwd:
+            return None
+        try:
+            import relatorio as rel
+            pasta = Path(self.cwd) / PASTA_MEMORIA / PASTA_RELATORIOS
+            pasta.mkdir(parents=True, exist_ok=True)
+            arq = pasta / f"relatorio-{job['id']}.docx"
+            arq.write_bytes(rel.gerar_docx(self.copia_job(job["id"])))
+            return str(arq)
+        except Exception:
+            return None
+
+    def copia_job(self, job_id):
+        """Copia da tarefa (sem o processo), com o log copiado sob o lock."""
+        with self.lock:
+            job = self.jobs.get(job_id)
+            if not job:
+                return None
+            copia = {k: v for k, v in job.items() if k not in ("proc", "log")}
+            copia["log"] = [dict(e) for e in job.get("log", [])]
+        return copia
 
     def cancelar(self, job_id):
         job = self.jobs.get(job_id)
@@ -478,4 +643,5 @@ class TerminalContact:
         return True
 
     def historico(self):
-        return [{k: v for k, v in j.items() if k != "proc"} for j in self.jobs.values()]
+        return [{k: v for k, v in j.items() if k not in ("proc", "log")}
+                for j in self.jobs.values()]

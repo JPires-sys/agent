@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Agent Branch</title>
+<title>agents0.7</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
@@ -11,12 +11,13 @@
 <body>
 <div id="app">
   <main id="stage">
-    <canvas id="world" aria-label="Escritorio dos agentes"></canvas>
+    <canvas id="world" aria-label="Mapa dos agentes"></canvas>
 
     <header id="topbar">
-      <div class="brand"><span class="logo"></span><b>AGENT BRANCH</b></div>
+      <button id="btn-home" class="brand" title="Voltar para a tela inicial"><span class="logo"></span><b>AGENTS<em>0.7</em></b></button>
       <div id="chain" class="chain"><span class="chain-empty">nenhuma tarefa em andamento</span></div>
       <div class="tools">
+        <label class="map-pick" title="Trocar de mapa"><span>Mapa</span><select id="sel-map"></select></label>
         <button id="btn-follow" class="chip on" title="A camera acompanha o agente ao vivo">● Seguir ao vivo</button>
         <button id="btn-names" class="chip on" title="Mostrar nomes">Nomes</button>
         <button id="btn-zoom-out" class="chip sq" title="Afastar">−</button>
@@ -24,17 +25,38 @@
       </div>
     </header>
 
-    <div id="hint">arraste para andar pelo escritorio · roda do mouse = zoom · clique num agente para escolhe-lo</div>
+    <div id="hint">arraste para andar pelo mapa · roda do mouse = zoom · clique num agente para escolhe-lo · clique no terminal verde (PC) para ver arquivos e tokens</div>
 
     <div id="minimap-wrap"><canvas id="minimap" width="180" height="120"></canvas><span>MAPA</span></div>
 
     <section id="output" class="collapsed">
-      <header id="output-head"><span class="dot"></span><b>SAIDA</b><span id="output-meta"></span><button id="output-toggle" class="chip sq">▴</button></header>
+      <header id="output-head"><span class="dot"></span><b>SAIDA</b><span id="output-meta"></span>
+        <span id="output-reports" class="rep-group" hidden title="Baixar o relatorio do que foi feito">
+          <span>Relatorio</span><button class="chip" data-fmt="docx">Word</button><button class="chip" data-fmt="txt">TXT</button>
+        </span>
+        <button id="output-toggle" class="chip sq">▴</button></header>
       <pre id="output-body">Nenhuma resposta ainda.</pre>
     </section>
 
     <div id="tooltip" hidden></div>
     <div id="toast" hidden></div>
+
+    <div id="pc-modal" class="modal" hidden>
+      <div class="modal-box">
+        <header><b>TERMINAL · AO VIVO</b><button class="chip sq modal-close" data-close="pc-modal" title="Fechar">✕</button></header>
+        <div class="pc-grid">
+          <div class="pc-cell"><span>Rodando</span><b id="pc-live">ninguem</b></div>
+          <div class="pc-cell"><span>Ha quanto tempo</span><b id="pc-since">-</b></div>
+          <div class="pc-cell wide"><span>Ferramenta atual</span><b id="pc-tool">-</b></div>
+          <div class="pc-cell"><span>Tokens (entrada / saida / cache)</span><b id="pc-tokens">0 / 0 / 0</b></div>
+          <div class="pc-cell"><span>Custo</span><b id="pc-cost">US$ 0.0000</b></div>
+        </div>
+        <h3>Tokens por agente</h3>
+        <table id="pc-agents"></table>
+        <h3>Arquivos alterados <small>(mais novo primeiro)</small></h3>
+        <ol id="pc-files"><li class="empty">nenhum ainda</li></ol>
+      </div>
+    </div>
   </main>
 
   <aside id="side">
@@ -82,10 +104,106 @@
     </section>
 
     <section class="card">
-      <h2>HISTORICO</h2>
+      <h2>HISTORICO
+        <button id="btn-agents" class="chip h2-btn" title="Criar, editar ou excluir agentes">Agentes</button>
+        <button id="btn-pc" class="chip h2-btn" title="Arquivos, ferramenta atual e tokens ao vivo">PC</button>
+      </h2>
       <ul id="history"><li class="empty">nada ainda</li></ul>
     </section>
   </aside>
+
+  <!-- gerenciador de agentes: lista + editor (perfil, aparencia, arquivo .md) -->
+  <div id="agent-modal" class="modal" hidden>
+    <div class="modal-box wide">
+      <header><b>AGENTES</b><span class="modal-sub">crie, edite ou exclua os agentes da equipe</span><button class="chip sq modal-close" data-close="agent-modal" title="Fechar">✕</button></header>
+      <div class="ag-wrap">
+        <nav class="ag-list">
+          <button id="ag-new" class="ag-item new"><span class="plus">+</span><span><b>Novo agente</b><small>a partir de um modelo pronto</small></span></button>
+          <div id="ag-items"></div>
+        </nav>
+        <div class="ag-editor">
+          <div class="ag-head">
+            <canvas id="ag-preview" width="72" height="72"></canvas>
+            <div class="ag-title"><b id="ag-title">Novo agente</b><small id="ag-file"></small></div>
+            <div class="tabs" role="tablist">
+              <button class="tab on" data-tab="perfil">Perfil</button>
+              <button class="tab" data-tab="visual">Aparencia</button>
+              <button class="tab" data-tab="arquivo">Arquivo .md</button>
+            </div>
+          </div>
+
+          <section class="tab-body" data-body="perfil">
+            <label id="ag-template-wrap">Comecar de um modelo<select id="ag-template"></select></label>
+            <div class="row">
+              <label>Nome (arquivo .md)<input id="ag-name" type="text" maxlength="41" placeholder="agent-designer" spellcheck="false"></label>
+              <label>Modelo do Claude<select id="ag-model"></select></label>
+            </div>
+            <label>Descricao (uma linha: os outros agentes leem isto para saber quando chamar)<input id="ag-desc" type="text" maxlength="400" placeholder="Designer. Cuida do CSS e do visual."></label>
+            <div class="tools-box">
+              <div class="tools-head"><span>Ferramentas que ele pode usar</span><label class="all"><input id="ag-tools-all" type="checkbox"> todas (sem restricao)</label></div>
+              <div id="ag-tools" class="tools-grid"></div>
+            </div>
+            <label>Instrucoes (corpo do .md: papel, regras, como responder)<textarea id="ag-prompt" rows="9" spellcheck="false" placeholder="Voce e o agent-..."></textarea></label>
+          </section>
+
+          <section class="tab-body" data-body="visual" hidden>
+            <div class="visual">
+              <canvas id="ag-preview-big" width="160" height="160"></canvas>
+              <div class="visual-fields">
+                <div class="skin-colors">
+                  <label>Pele<input type="color" data-skin="skin"></label>
+                  <label>Cabelo<input type="color" data-skin="hair"></label>
+                  <label>Camisa<input type="color" data-skin="shirt"></label>
+                  <label>Calca<input type="color" data-skin="pants"></label>
+                  <label>Sapato<input type="color" data-skin="shoe"></label>
+                  <label>Gravata<input type="color" data-skin="tie"></label>
+                </div>
+                <label>Penteado<select id="ag-hair"></select></label>
+                <div id="ag-acc" class="skin-acc"></div>
+                <button id="ag-random" class="ghost" title="Sortear uma aparencia">Sortear aparencia</button>
+              </div>
+            </div>
+          </section>
+
+          <section class="tab-body" data-body="arquivo" hidden>
+            <p class="note">Edicao direta do arquivo. O cabecalho entre <code>---</code> precisa ter <code>name:</code> igual ao nome do arquivo e <code>description:</code>.</p>
+            <textarea id="ag-raw" rows="16" spellcheck="false"></textarea>
+            <div class="row buttons"><button id="ag-raw-save" class="ghost">Salvar arquivo</button><button id="ag-raw-reload" class="ghost">Recarregar</button></div>
+          </section>
+
+          <footer class="ag-foot">
+            <p id="ag-note" class="note"></p>
+            <button id="ag-delete" class="danger" hidden>Excluir</button>
+            <button id="ag-save" class="primary">CRIAR AGENTE</button>
+          </footer>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- tela inicial -->
+  <section id="start" hidden>
+    <div class="start-card">
+      <div class="start-logo"><span class="logo-blk"></span><b>agents</b><em>0.7</em></div>
+      <p class="start-sub">um escritorio em pixel art onde agentes do Claude Code trabalham juntos ao vivo</p>
+
+      <h3>ESCOLHA O MAPA</h3>
+      <div id="start-maps" class="map-cards"></div>
+
+      <h3>SUA EQUIPE <button id="start-agents" class="chip">Gerenciar agentes</button></h3>
+      <div id="start-team" class="team"></div>
+
+      <div class="start-folder">
+        <span>Pasta de trabalho</span><code id="start-folder">...</code><button id="start-folder-btn" class="chip">Escolher</button>
+      </div>
+
+      <div class="start-actions">
+        <button id="start-go" class="primary big">ENTRAR <small>Enter</small></button>
+        <button id="start-demo" class="ghost">Entrar e ver uma demonstracao</button>
+      </div>
+      <p class="start-foot">arraste para andar pelo mapa · roda do mouse para zoom · o agente <b>AO VIVO</b> e quem esta trabalhando agora</p>
+    </div>
+  </section>
 </div>
 <script src="game.js"></script>
 <script src="app.js"></script>
